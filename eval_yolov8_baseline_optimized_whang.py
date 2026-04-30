@@ -3,6 +3,7 @@ YOLOv8 Baseline 평가 - 정확도(mAP) & 속도(FPS, Latency)
 세종대학교 Recycle Mate 프로젝트
 """
 
+
 import os
 import time
 import json
