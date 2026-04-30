@@ -130,11 +130,39 @@ def main():
     optimizer = torch.optim.SGD(
         model.parameters(), lr=1e-2, momentum=0.937, weight_decay=5e-4
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
-#[최적화]최적화 함수를 AdamW에서 SGD로 변경했기 때문에
-print(f"   Optimizer: SGD (lr={LR}, wd={WEIGHT_DECAY}, momentum=0.937)")
-print(f"   Scheduler: CosineAnnealing (T_max={EPOCHS})")
+    # -----------------[최적화]--------------------------
 
+    #  Scheduler 설계 (Warmup + Cosine Annealing)
+    WARMUP_EPOCHS = 3  # 처음 3 에포크 동안 Warmup 진행
+
+    # [Step 1] Linear Warmup: 시작 학습률을 목표 학습률(1e-2)의 1% 수준(0.01)에서 100%(1.0)까지 서서히 올림
+    warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, start_factor=0.01, end_factor=1.0, total_iters=WARMUP_EPOCHS
+    )
+
+    # [Step 2] Cosine Annealing: 남은 에포크 동안 부드럽게 학습률을 감소시킴
+    main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer,
+        T_max=(EPOCHS - WARMUP_EPOCHS),  # 전체 에포크에서 웜업 기간을 뺀 만큼만 진행
+    )
+
+    # [Step 3] SequentialLR: 두 스케줄러를 하나로 이어 붙임
+    scheduler = torch.optim.lr_scheduler.SequentialLR(
+        optimizer,
+        schedulers=[warmup_scheduler, main_scheduler],
+        milestones=[
+            WARMUP_EPOCHS
+        ],  # WARMUP_EPOCHS(3)에 도달하면 main_scheduler로 바통 터치
+    )
+
+    # -----------------[최적화]--------------------------
+
+    # [최적화로 인한 수정]최적화 함수를 AdamW에서 SGD로 변경했기 때문에
+    print(f"   Optimizer: SGD (lr={LR}, wd={WEIGHT_DECAY}, momentum=0.937)")
+    # [최적화로 인한 수정]웜업 3 에포크를 넣었고, T_max는 97(EPOCHS - WARMUP_EPOCHS)로 돌아가고 있dma
+    print(
+        f"   Scheduler: Linear Warmup ({WARMUP_EPOCHS} epochs) + CosineAnnealing (T_max={EPOCHS - WARMUP_EPOCHS})"
+    )
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     # 4. 학습 루프
     # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -192,12 +220,22 @@ print(f"   Scheduler: CosineAnnealing (T_max={EPOCHS})")
         with torch.no_grad():
             for batch in val_loader:
                 images = batch["img"].to(DEVICE).float() / 255.0
-
+                # [밑의 두개 최적화 이유]with torch.no_grad():는 가중치(Weight)의 기울기 업데이트만 막을 뿐, BatchNorm 레이어의 평균/분산 통계치(Running Mean/Var)가 갱신되는 것은 막지 못함.
+                # 이 코드를 그대로 돌리면 모델이 검증(Validation) 데이터를 볼 때마다 BatchNorm 통계치가 오염되어, 결국 최종 정확도(mAP)가 심각하게 떨어지게 됨.
+                # [최적화] BatchNorm 통계치 업데이트 강제 차단 (오염 방지)
+                for m in model.modules():
+                    if isinstance(m, nn.BatchNorm2d):
+                        m.track_running_stats = False
+                # ----------------------------------------
                 # eval 모드에서도 training forward가 필요 -> 임시로 train 모드
                 model.train()
                 preds = model(images)
                 model.eval()
-
+                # [최적화] BatchNorm 통계치 업데이트 다시 복구
+                for m in model.modules():
+                    if isinstance(m, nn.BatchNorm2d):
+                        m.track_running_stats = True
+                # ----------------------------------------
                 loss, loss_items = criterion(preds, batch)
                 if loss.dim() > 0:
                     loss = loss.mean()
