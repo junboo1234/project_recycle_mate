@@ -20,7 +20,7 @@ from ultralytics.utils.loss import v8DetectionLoss
 # 설정
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DATASET_YAML = r"C:\Users\43074\Desktop\RecycleMate\dataset-shrinked\processed\yolo_major9\metadata\dataset.yaml"
-MODEL_NAME = "yolov8n.pt"       # nano 모델 (베이스라인)
+MODEL_NAME = "yolov8n.yaml"      # nano 모델 (베이스라인) -> 빈 구조로 변경 
 EPOCHS = 100
 # yolo 계열에서 가장 일반적인 기본값
 BATCH_SIZE = 32
@@ -48,7 +48,8 @@ def main():
 
     yolo = YOLO(MODEL_NAME)
     model = yolo.model.to(DEVICE)
-
+    
+    model = torch.compile(model, mode="reduce-overhead") #C++ 로우레벨 코드로 컴파일
     # 하이퍼파라미터를 SimpleNamespace로 설정
     hyp = model.args if hasattr(model, 'args') else {}
     if isinstance(hyp, dict):
@@ -90,8 +91,14 @@ def main():
     train_dataset = build_yolo_dataset(
         cfg, img_path=data_info["train"], batch=BATCH_SIZE, data=data_info, mode="train"
     )
-    train_loader = build_dataloader(train_dataset, batch=BATCH_SIZE, workers=4, rank=-1)
-
+    train_loader = build_dataloader(
+        train_dataset, 
+        batch=BATCH_SIZE, 
+        workers=4, 
+        rank=-1,
+        pin_memory=True,          # CPU 메모리를 고정하여 GPU로의 전송 속도 극대화
+        persistent_workers=True   # 스레드 재사용
+    )
     val_dataset = build_yolo_dataset(
         cfg, img_path=data_info["val"], batch=BATCH_SIZE, data=data_info, mode="val"
     )
@@ -108,7 +115,8 @@ def main():
     print("=" * 60)
 
     criterion = v8DetectionLoss(model)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY, fused=True)
+    # fused=True 옵션은 AdamW의 연산을 통합하여 GPU에서 더 빠르게 실행되도록 최적화.학습 속도 향상
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS)
 
     print(f"   Optimizer: AdamW (lr={LR}, wd={WEIGHT_DECAY})")
@@ -147,7 +155,7 @@ def main():
                 loss = loss.mean()
 
             # backward
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True) # 0으로 초기화 대신 참조 링크를 끊는 방식
             
             loss.backward()
 
@@ -264,3 +272,5 @@ def main():
 if __name__ == "__main__":
     freeze_support()
     main()
+
+
