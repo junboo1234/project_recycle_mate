@@ -49,7 +49,7 @@ def main():
     yolo = YOLO(MODEL_NAME)
     model = yolo.model.to(DEVICE)
     
-    model = torch.compile(model, mode="reduce-overhead") #C++ 로우레벨 코드로 컴파일
+    # model = torch.compile(model, mode="reduce-overhead") #C++ 로우레벨 코드로 컴파일
     # 하이퍼파라미터를 SimpleNamespace로 설정
     hyp = model.args if hasattr(model, 'args') else {}
     if isinstance(hyp, dict):
