@@ -97,7 +97,7 @@ def main():
         workers=4, 
         rank=-1,
         pin_memory=True,          # CPU 메모리를 고정하여 GPU로의 전송 속도 극대화
-        persistent_workers=True   # 스레드 재사용
+        # persistent_workers=True   # 스레드 재사용
     )
     val_dataset = build_yolo_dataset(
         cfg, img_path=data_info["val"], batch=BATCH_SIZE, data=data_info, mode="val"
