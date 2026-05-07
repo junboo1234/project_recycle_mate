@@ -1,8 +1,3 @@
-"""
-YOLOv8 Baseline Training - 순수 PyTorch 학습 루프
-세종대학교 Recycle Mate 프로젝트
-"""
-
 import os
 import time
 import torch
@@ -15,6 +10,9 @@ from ultralytics.data import build_dataloader, build_yolo_dataset
 from ultralytics.cfg import get_cfg
 from ultralytics.data.utils import check_det_dataset
 from ultralytics.utils.loss import v8DetectionLoss
+from torchvision.models import efficientnet_b0
+from ultralytics.nn.modules.head import Detect
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 # 설정
@@ -36,6 +34,47 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 
+# 1. EfficientNet 백본 (특징 추출기)
+class EfficientNetBackbone(nn.Module):
+    def __init__(self):
+        super().__init__()
+        # 정규화: 이미 검증된 EfficientNet 구조 사용
+        base = efficientnet_b0(weights=None) 
+        self.features = base.features
+        
+    def forward(self, x):
+        outputs = []
+        for i, layer in enumerate(self.features):
+            x = layer(x)
+            if i == 3:   # P3 (Stride 8)
+                outputs.append(x)
+            elif i == 5: # P4 (Stride 16)
+                outputs.append(x)
+            elif i == 8: # P5 (Stride 32)
+                outputs.append(x)
+        return outputs
+
+
+# 3. 전체 모델 조립
+class EfficientYOLO(nn.Module):
+    def __init__(self, nc=9):
+        super().__init__()
+        self.backbone = EfficientNetBackbone()
+        
+        # [과적합 방지] Dropout 추가: 특징 추출 후 정보를 일부러 누락시켜 강하게 학습
+        self.dropout = nn.Dropout2d(p=0.1)
+        
+        # YOLOv8 공식 Detect 헤드
+        self.model = Detect(nc=nc, ch=(40, 80, 1280))
+        self.stride = torch.tensor([8.0, 16.0, 32.0])
+        self.model.stride = self.stride
+
+    def forward(self, x):
+        features = self.backbone(x)
+        # 각 스케일별 특징 지도에 드롭아웃 적용
+        features = [self.dropout(f) for f in features]
+        return self.model(features)
+
 def main():
     os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -47,9 +86,8 @@ def main():
     print("=" * 60)
 
     yolo = YOLO(MODEL_NAME)
-    model = yolo.model.to(DEVICE)
-    
-    model = torch.compile(model, mode="reduce-overhead") #C++ 로우레벨 코드로 컴파일
+    model = EfficientYOLO(nc=9).to(DEVICE)    
+    # model = torch.compile(model, mode="reduce-overhead") #C++ 로우레벨 코드로 컴파일
     # 하이퍼파라미터를 SimpleNamespace로 설정
     hyp = model.args if hasattr(model, 'args') else {}
     if isinstance(hyp, dict):
@@ -97,7 +135,7 @@ def main():
         workers=4, 
         rank=-1,
         pin_memory=True,          # CPU 메모리를 고정하여 GPU로의 전송 속도 극대화
-        persistent_workers=True   # 스레드 재사용
+        # persistent_workers=True   # 스레드 재사용
     )
     val_dataset = build_yolo_dataset(
         cfg, img_path=data_info["val"], batch=BATCH_SIZE, data=data_info, mode="val"
